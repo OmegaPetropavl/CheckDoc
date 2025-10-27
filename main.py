@@ -102,7 +102,7 @@ async def start_tg_polling():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     dp = build_dp()
-    await dp.start_polling(bot)   # без allowed_updates, чтобы ничего не фильтровать
+    await dp.start_polling(bot, handle_signals=False)   # без allowed_updates, чтобы ничего не фильтровать
     logger.info("Polling finished.")
 
 # ======= ФОНОВЫЙ АВТОСТАРТ БОТА ДЛЯ STREAMLIT =======
