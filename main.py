@@ -11,31 +11,33 @@ from aiogram.enums import ParseMode
 from aiogram.types import Message
 from aiogram.filters import CommandStart
 
-# -------------------------------
-# Настройки и секреты (Streamlit)
-# -------------------------------
-# Берём ключи из Streamlit Cloud → App → Settings → Secrets
+# =========================
+#  СЕКРЕТЫ (Streamlit Cloud)
+# =========================
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
-GPT_ID = st.secrets["GPT_ID"]  # asst_...
+GPT_ID         = st.secrets["GPT_ID"]  # ассистент (asst_...)
 
-# Убираем депрекейшн-варнинги про Assistants API
+# Ссылка на бота в Telegram
+TELEGRAM_BOT_LINK = "https://t.me/CheckDoc"
+
+# Глушим DeprecationWarning для Assistants API
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# OpenAI (старый Assistants API)
+# OpenAI (старый интерфейс)
 openai.api_key = OPENAI_API_KEY
 
 
-# ==========================
-#     TELEGRAM (aiogram 3)
-# ==========================
+# ======================================================
+#                TELEGRAM BOT (aiogram 3)
+# ======================================================
 async def tg_cmd_start(message: Message):
-    await message.answer("👋 Здравствуйте! Я ваш ИИ-помощник. Напишите, что вас тревожит?")
+    await message.answer("👋 Привет! Я ваш ИИ-помощник. Напишите, что вас тревожит.")
 
 async def tg_handle_text(message: Message):
     user_text = message.text or ""
     try:
-        # Создаём поток (thread) и запускаем ассистента без system prompt
+        # Для Telegram: короткая сессия (новый thread на запрос)
         thread = openai.beta.threads.create(
             messages=[{"role": "user", "content": user_text}]
         )
@@ -44,28 +46,26 @@ async def tg_handle_text(message: Message):
             assistant_id=GPT_ID,
         )
 
-        # Ждём завершения ответа ассистента
         while True:
-            run_status = openai.beta.threads.runs.retrieve(
-                thread_id=thread.id,
-                run_id=run.id
-            )
-            if run_status.status == "completed":
+            status = openai.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+            if status.status == "completed":
                 break
-            if run_status.status == "failed":
+            if status.status == "failed":
                 await message.answer("❌ Ассистент не смог ответить.")
                 return
             await asyncio.sleep(0.8)
 
-        # Получаем ответ
-        messages_list = openai.beta.threads.messages.list(thread_id=thread.id)
-        reply = messages_list.data[0].content[0].text.value
-        await message.answer(reply)
-
+        msgs = openai.beta.threads.messages.list(thread_id=thread.id)
+        reply = None
+        for m in msgs.data:  # ищем первый ответ ассистента
+            if m.role == "assistant":
+                reply = m.content[0].text.value
+                break
+        await message.answer(reply or "⚠️ Ответ ассистента не найден.")
     except Exception as e:
         await message.answer(f"⚠️ Ошибка: {e}")
 
-def build_dispatcher() -> Dispatcher:
+def build_dp() -> Dispatcher:
     dp = Dispatcher()
     dp.message.register(tg_cmd_start, CommandStart())
     dp.message.register(tg_handle_text, F.text)
@@ -73,23 +73,23 @@ def build_dispatcher() -> Dispatcher:
 
 async def start_telegram_bot():
     bot = Bot(token=TELEGRAM_TOKEN, parse_mode=ParseMode.HTML)
-    dp = build_dispatcher()
-    # skip старые сообщения; оставим resolve_used_update_types()
+    dp = build_dp()
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
-# ==========================================================
-#     ФОНОВЫЙ ЗАПУСК БОТА ДЛЯ РЕЖИМА STREAMLIT (один раз)
-# ==========================================================
+# ======================================================
+#      ФОНОВЫЙ АВТОСТАРТ БОТА ДЛЯ STREAMLIT
+# ======================================================
 @st.cache_resource
 def _bot_runtime():
+    """Кэшируем состояние, чтобы бот стартовал один раз за процесс."""
     return {"started": False, "thread": None}
 
 def start_bot_in_background_once():
-    runtime = _bot_runtime()
-    if runtime["started"]:
+    rt = _bot_runtime()
+    if rt["started"]:
         return
-    def _thread_target():
+    def _target():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -97,75 +97,107 @@ def start_bot_in_background_once():
         finally:
             loop.run_until_complete(loop.shutdown_asyncgens())
             loop.close()
-    th = threading.Thread(target=_thread_target, name="tg-bot-thread", daemon=True)
+    th = threading.Thread(target=_target, name="tg-bot-thread", daemon=True)
     th.start()
-    runtime["started"] = True
-    runtime["thread"] = th
+    rt["started"] = True
+    rt["thread"] = th
 
 
-# ==================
-#     STREAMLIT UI
-# ==================
+# ======================================================
+#                   STREAMLIT  UI (чат)
+# ======================================================
+def init_chat_session():
+    if "thread_id" not in st.session_state:
+        # Для веб-чата создаём PERSISTENT thread (история сохраняется)
+        thread = openai.beta.threads.create()
+        st.session_state.thread_id = thread.id
+    if "messages" not in st.session_state:
+        st.session_state.messages = []  # [{"role": "user"/"assistant", "content": str}, ...]
+
+def render_chat():
+    for msg in st.session_state.messages:
+        with st.chat_message("user" if msg["role"] == "user" else "assistant"):
+            st.markdown(msg["content"])
+
+def add_user_message(text: str):
+    st.session_state.messages.append({"role": "user", "content": text})
+
+def add_assistant_message(text: str):
+    st.session_state.messages.append({"role": "assistant", "content": text})
+
+def ask_assistant_via_thread(user_text: str) -> str:
+    """Отправка в существующий thread веб-чата и ожидание ответа ассистента."""
+    thread_id = st.session_state.thread_id
+
+    openai.beta.threads.messages.create(
+        thread_id=thread_id,
+        role="user",
+        content=user_text
+    )
+    run = openai.beta.threads.runs.create(
+        thread_id=thread_id,
+        assistant_id=GPT_ID,
+    )
+
+    while True:
+        status = openai.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+        if status.status == "completed":
+            break
+        if status.status == "failed":
+            return "❌ Ассистент не смог ответить."
+        time.sleep(0.8)
+
+    msgs = openai.beta.threads.messages.list(thread_id=thread_id)
+    for m in msgs.data:
+        if m.role == "assistant":
+            return m.content[0].text.value
+    return "⚠️ Ответ ассистента не найден."
+
 def streamlit_app():
+    # 👉 Автостарт Telegram-бота при загрузке страницы (без кнопки)
+    start_bot_in_background_once()
+
     st.set_page_config(page_title="CheckDoc — Виртуальный доктор", page_icon="💊")
     st.title("💊 CheckDoc — Виртуальный доктор")
-    st.caption("Telegram-бот + веб-чат (Assistants API)")
+    st.caption("Веб-чат (Assistants API) + Telegram-бот (aiogram 3) запускаются одновременно.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("▶️ Запустить Telegram-бота"):
-            start_bot_in_background_once()
-            st.success("Бот запущен в фоне. Напишите своему боту в Telegram.")
-
-    with col2:
-        st.markdown("**Статус:** бот будет работать в фоне даже при обновлении страницы.")
+    # Ссылка на бота
+    st.link_button("Открыть бота в Telegram", TELEGRAM_BOT_LINK)
 
     st.divider()
     st.subheader("Веб-чат")
 
-    user_msg = st.text_input("Опишите симптомы или задайте вопрос:")
-    if st.button("Отправить ассистенту") and user_msg.strip():
-        try:
-            thread = openai.beta.threads.create(
-                messages=[{"role": "user", "content": user_msg.strip()}]
-            )
-            run = openai.beta.threads.runs.create(
-                thread_id=thread.id,
-                assistant_id=GPT_ID,
-            )
+    init_chat_session()
+    render_chat()
 
-            # Ждём завершения (в синхронном контексте Streamlit — без await)
-            while True:
-                run_status = openai.beta.threads.runs.retrieve(
-                    thread_id=thread.id,
-                    run_id=run.id
-                )
-                if run_status.status == "completed":
-                    break
-                if run_status.status == "failed":
-                    st.error("❌ Ассистент не смог ответить.")
-                    return
-                time.sleep(0.8)
+    # Поле ввода в стиле чата
+    user_text = st.chat_input("Опишите симптомы или задайте вопрос…")
+    if user_text:
+        add_user_message(user_text)
+        with st.chat_message("user"):
+            st.markdown(user_text)
 
-            messages_list = openai.beta.threads.messages.list(thread_id=thread.id)
-            answer = messages_list.data[0].content[0].text.value
-            st.markdown("**Ответ ИИ:**")
-            st.write(answer)
-
-        except Exception as e:
-            st.error(f"Ошибка: {e}")
+        # Ответ ассистента
+        with st.chat_message("assistant"):
+            with st.spinner("ИИ печатает…"):
+                try:
+                    answer = ask_assistant_via_thread(user_text)
+                except Exception as e:
+                    answer = f"Ошибка: {e}"
+                st.markdown(answer)
+                add_assistant_message(answer)
 
     st.divider()
-    
+    st.caption("Ключи берутся из st.secrets. Используется старый OpenAI Assistants API без system prompt в коде.")
 
 
 # =================================
-#     ТОЧКИ ВХОДА В ПРИЛОЖЕНИЕ
+#     ТОЧКИ ВХОДА (оба сценария)
 # =================================
 if "streamlit" in sys.modules:
-    # Запуск как Streamlit-приложение (cloud/локально с `streamlit run main.py`)
+    # Запущено как Streamlit-приложение → веб и бот поднимаются вместе
     streamlit_app()
 else:
-    # Обычный запуск файла: python main.py  → только Telegram-бот
+    # Прямой запуск файла → только Telegram-бот
     if __name__ == "__main__":
         asyncio.run(start_telegram_bot())
