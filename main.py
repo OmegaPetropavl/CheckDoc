@@ -1,140 +1,145 @@
+# main.py
+import os
 import sys
-import threading
-import asyncio
 import time
+import asyncio
 import warnings
 import logging
+import subprocess
+import platform
 
-import streamlit as st
-import openai
-
-from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart, Command
-from aiogram.types import Message
-from aiogram.client.default import DefaultBotProperties  # ✅ для aiogram 3.7+
-
-# ========= СЕКРЕТЫ =========
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
-GPT_ID         = st.secrets["GPT_ID"]          # asst_...
-TELEGRAM_LINK  = "https://t.me/MedAdvice_bot"  # ✅ актуальная ссылка
-
-# Глушим DeprecationWarning для Assistants API
+# ===== Общие настройки/логи =====
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-# OpenAI (старый Assistants API)
-openai.api_key = OPENAI_API_KEY
-
-# ========= ЛОГИ =========
 logger = logging.getLogger("checkdoc")
 logger.setLevel(logging.INFO)
 if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter("[%(levelname)s] %(asctime)s %(name)s: %(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("[%(levelname)s] %(asctime)s %(name)s: %(message)s"))
+    logger.addHandler(_h)
 
-# ======= TELEGRAM BOT (aiogram 3.7+) =======
-async def cmd_start(message: Message):
-    await message.answer("👋 Привет! Я ваш ИИ-помощник. Напишите, что вас тревожит.")
+# ===== Режимы =====
+RUN_MODE = os.getenv("RUN_MODE", "web")  # 'web' (Streamlit) или 'bot' (подпроцесс)
 
-async def cmd_ping(message: Message):
-    await message.answer("🏓 pong")
-
-async def cmd_diag(message: Message):
-    try:
-        _ = OPENAI_API_KEY[:6] + "..."
-        await message.answer("✅ Бот активен. Напишите симптомы для консультации.")
-    except Exception as e:
-        await message.answer(f"❌ Диагностика: {e!r}")
-
-async def handle_text(message: Message):
-    user_text = message.text or ""
-    try:
-        # 1) Создаём короткий thread под запрос
-        thread = openai.beta.threads.create(
-            messages=[{"role": "user", "content": user_text}]
-        )
-        # 2) Запускаем ассистента
-        run = openai.beta.threads.runs.create(
-            thread_id=thread.id,
-            assistant_id=GPT_ID,
-        )
-        # 3) Ожидаем
-        while True:
-            status = openai.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
-            if status.status == "completed":
-                break
-            if status.status == "failed":
-                logger.error("Assistant run failed: %s", status)
-                await message.answer("❌ Ассистент не смог ответить.")
-                return
-            await asyncio.sleep(0.7)
-
-        # 4) Ответ ассистента
-        msgs = openai.beta.threads.messages.list(thread_id=thread.id)
-        reply = None
-        for m in msgs.data:
-            if m.role == "assistant":
-                reply = m.content[0].text.value
-                break
-        if not reply:
-            reply = "⚠️ Ответ ассистента не найден."
-        await message.answer(reply)
-    except Exception as e:
-        logger.exception("Handler error:")
-        await message.answer("⚠️ Временная ошибка обработки. Попробуйте ещё раз.")
-
-def build_dp() -> Dispatcher:
-    dp = Dispatcher()
-    dp.message.register(cmd_start, CommandStart())
-    dp.message.register(cmd_ping,  Command("ping"))
-    dp.message.register(cmd_diag,  Command("diag"))
-    dp.message.register(handle_text, F.text)
-    return dp
-
-async def start_tg_polling():
-    logger.info("Starting Telegram bot polling…")
-    # ✅ aiogram 3.7+: вместо parse_mode используем DefaultBotProperties
-    bot = Bot(
-        token=TELEGRAM_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-    )
-    dp = build_dp()
-    await dp.start_polling(bot, handle_signals=False)   # без allowed_updates, чтобы ничего не фильтровать
-    logger.info("Polling finished.")
-
-# ======= ФОНОВЫЙ АВТОСТАРТ БОТА ДЛЯ STREAMLIT =======
-@st.cache_resource
-def _bot_runtime():
-    """Чтобы бот стартовал один раз за процесс Streamlit."""
-    return {"started": False, "thread": None, "last_error": None}
-
-def ensure_bot_running():
-    rt = _bot_runtime()
-    if rt["started"]:
-        return
-    def _target():
+# ====== BOT MODE (чистый aiogram в отдельном процессе) ======
+if RUN_MODE == "bot":
+    # На Windows безопасная policy
+    if platform.system() == "Windows":
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(start_tg_polling())
-        except Exception as e:
-            rt["last_error"] = repr(e)
-            logger.exception("Bot thread crashed:")
-        finally:
-            try:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-            except Exception:
-                pass
-            loop.close()
-    th = threading.Thread(target=_target, name="tg-bot-thread", daemon=True)
-    th.start()
-    rt["started"] = True
-    rt["thread"] = th
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception:
+            pass
 
-# ======= STREAMLIT: чат на Assistants API с историей =======
+    import openai
+    from aiogram import Bot, Dispatcher, F
+    from aiogram.enums import ParseMode
+    from aiogram.types import Message
+    from aiogram.filters import CommandStart, Command
+    from aiogram.client.default import DefaultBotProperties
+
+    OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+    TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+    GPT_ID         = os.environ["GPT_ID"]
+
+    openai.api_key = OPENAI_API_KEY
+
+    async def cmd_start(message: Message):
+        await message.answer("👋 Привет! Я ваш ИИ-помощник. Напишите, что вас тревожит.")
+
+    async def cmd_ping(message: Message):
+        await message.answer("🏓 pong")
+
+    async def cmd_diag(message: Message):
+        await message.answer("✅ Бот активен. Напишите симптомы для консультации.")
+
+    async def handle_text(message: Message):
+        user_text = message.text or ""
+        try:
+            thread = openai.beta.threads.create(messages=[{"role": "user", "content": user_text}])
+            run = openai.beta.threads.runs.create(thread_id=thread.id, assistant_id=GPT_ID)
+            while True:
+                status = openai.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+                if status.status == "completed":
+                    break
+                if status.status == "failed":
+                    await message.answer("❌ Ассистент не смог ответить.")
+                    return
+                await asyncio.sleep(0.7)
+            msgs = openai.beta.threads.messages.list(thread_id=thread.id)
+            reply = None
+            for m in msgs.data:
+                if m.role == "assistant":
+                    reply = m.content[0].text.value
+                    break
+            await message.answer(reply or "⚠️ Ответ ассистента не найден.")
+        except Exception:
+            await message.answer("⚠️ Временная ошибка. Попробуйте ещё раз.")
+
+    def build_dp() -> Dispatcher:
+        dp = Dispatcher()
+        dp.message.register(cmd_start, CommandStart())
+        dp.message.register(cmd_ping,  Command("ping"))
+        dp.message.register(cmd_diag,  Command("diag"))
+        dp.message.register(handle_text, F.text)
+        return dp
+
+    async def start_tg_polling():
+        bot = Bot(
+            token=TELEGRAM_TOKEN,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+        )
+        dp = build_dp()
+        # В главном процессе подпроцесса — сигналы уже ОК
+        await dp.start_polling(bot)
+
+    if __name__ == "__main__":
+        asyncio.run(start_tg_polling())
+        sys.exit(0)
+
+# ===== WEB MODE (Streamlit: UI + автозапуск подпроцесса бота) =====
+# Тут импортируем streamlit только в веб-режиме
+import streamlit as st
+import openai
+
+# Секреты из Streamlit Cloud
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
+GPT_ID         = st.secrets["GPT_ID"]
+TELEGRAM_LINK  = "https://t.me/MedAdvice_bot"
+
+openai.api_key = OPENAI_API_KEY
+
+# --- управление подпроцессом бота ---
+@st.cache_resource
+def _bot_proc_state():
+    return {"proc": None, "started": False, "last_error": None}
+
+def ensure_bot_subprocess():
+    state = _bot_proc_state()
+    if state["started"] and state["proc"] and state["proc"].poll() is None:
+        return
+    env = os.environ.copy()
+    env["RUN_MODE"]      = "bot"
+    env["OPENAI_API_KEY"] = OPENAI_API_KEY
+    env["TELEGRAM_TOKEN"] = TELEGRAM_TOKEN
+    env["GPT_ID"]         = GPT_ID
+
+    # Запускаем ЭТОТ ЖЕ файл как отдельный процесс в режиме бота
+    py = sys.executable
+    script = os.path.abspath(__file__)
+    try:
+        proc = subprocess.Popen(
+            [py, script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env
+        )
+        state["proc"] = proc
+        state["started"] = True
+        state["last_error"] = None
+    except Exception as e:
+        state["last_error"] = repr(e)
+
+# --- чатовые утилиты (Assistants API) ---
 def init_chat_session():
     if "thread_id" not in st.session_state:
         thread = openai.beta.threads.create()
@@ -167,21 +172,25 @@ def ask_assistant(user_text: str) -> str:
             return m.content[0].text.value
     return "⚠️ Ответ ассистента не найден."
 
+# --- Streamlit UI ---
 def streamlit_app():
-    # автозапуск бота (без кнопок)
-    ensure_bot_running()
+    # Автозапуск подпроцесса бота
+    ensure_bot_subprocess()
 
     st.set_page_config(page_title="CheckDoc — Виртуальный доктор", page_icon="💊")
     st.title("💊 CheckDoc — Виртуальный доктор")
     st.link_button("Открыть бота в Telegram", TELEGRAM_LINK)
 
-    # Сайдбар — только статус (без caption)
-    rt = _bot_runtime()
+    # Статус бота (сайдбар)
+    state = _bot_proc_state()
     with st.sidebar:
         st.subheader("Статус бота")
-        st.write("✅ Запущен" if rt["started"] else "⏳ Стартуется…")
-        if rt["last_error"]:
-            st.error(f"Последняя ошибка: {rt['last_error']}")
+        if state["proc"] and state["proc"].poll() is None:
+            st.write("✅ Запущен (подпроцесс)")
+        else:
+            st.write("⏳ Стартуется…")
+        if state["last_error"]:
+            st.error(f"Последняя ошибка: {state['last_error']}")
         st.write("Команды: /start, /ping, /diag")
 
     st.divider()
@@ -208,9 +217,6 @@ def streamlit_app():
     st.divider()
     
 
-# ======= ТОЧКИ ВХОДА =======
-if "streamlit" in sys.modules:
+# Точка входа веба
+if __name__ == "__main__" or "streamlit" in sys.modules:
     streamlit_app()
-else:
-    if __name__ == "__main__":
-        asyncio.run(start_tg_polling())
