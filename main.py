@@ -7,16 +7,18 @@ import logging
 
 import streamlit as st
 import openai
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
+from aiogram.client.default import DefaultBotProperties  # ✅ для aiogram 3.7+
 
 # ========= СЕКРЕТЫ =========
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
 GPT_ID         = st.secrets["GPT_ID"]          # asst_...
-TELEGRAM_LINK  = "https://t.me/CheckDoc"       # ссылка на бота
+TELEGRAM_LINK  = "https://t.me/MedAdvice_bot"  # ✅ актуальная ссылка
 
 # Глушим DeprecationWarning для Assistants API
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -24,15 +26,16 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # OpenAI (старый Assistants API)
 openai.api_key = OPENAI_API_KEY
 
-# ========= ЛОГИ aiogram/бота =========
+# ========= ЛОГИ =========
 logger = logging.getLogger("checkdoc")
 logger.setLevel(logging.INFO)
-handler = logging.StreamHandler()
-formatter = logging.Formatter("[%(levelname)s] %(asctime)s %(name)s: %(message)s")
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("[%(levelname)s] %(asctime)s %(name)s: %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
-# ======= TELEGRAM BOT (aiogram 3) =======
+# ======= TELEGRAM BOT (aiogram 3.7+) =======
 async def cmd_start(message: Message):
     await message.answer("👋 Привет! Я ваш ИИ-помощник. Напишите, что вас тревожит.")
 
@@ -41,16 +44,15 @@ async def cmd_ping(message: Message):
 
 async def cmd_diag(message: Message):
     try:
-        # Мини-проверка OpenAI (без ассистента, просто echo)
         _ = OPENAI_API_KEY[:6] + "..."
-        await message.answer("✅ Бот жив. OpenAI ключ загружен. Попробуйте написать симптомы.")
+        await message.answer("✅ Бот активен. Напишите симптомы для консультации.")
     except Exception as e:
         await message.answer(f"❌ Диагностика: {e!r}")
 
 async def handle_text(message: Message):
     user_text = message.text or ""
     try:
-        # 1) Создаём короткий thread под конкретный запрос
+        # 1) Создаём короткий thread под запрос
         thread = openai.beta.threads.create(
             messages=[{"role": "user", "content": user_text}]
         )
@@ -59,7 +61,7 @@ async def handle_text(message: Message):
             thread_id=thread.id,
             assistant_id=GPT_ID,
         )
-        # 3) Ожидаем готовность
+        # 3) Ожидаем
         while True:
             status = openai.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
             if status.status == "completed":
@@ -70,7 +72,7 @@ async def handle_text(message: Message):
                 return
             await asyncio.sleep(0.7)
 
-        # 4) Достаём ответ ассистента
+        # 4) Ответ ассистента
         msgs = openai.beta.threads.messages.list(thread_id=thread.id)
         reply = None
         for m in msgs.data:
@@ -82,7 +84,7 @@ async def handle_text(message: Message):
         await message.answer(reply)
     except Exception as e:
         logger.exception("Handler error:")
-        await message.answer("⚠️ Временная ошибка обработки. Попробуйте ещё раз через минуту.")
+        await message.answer("⚠️ Временная ошибка обработки. Попробуйте ещё раз.")
 
 def build_dp() -> Dispatcher:
     dp = Dispatcher()
@@ -94,11 +96,13 @@ def build_dp() -> Dispatcher:
 
 async def start_tg_polling():
     logger.info("Starting Telegram bot polling…")
-    bot = Bot(token=TELEGRAM_TOKEN, parse_mode=ParseMode.HTML)
+    # ✅ aiogram 3.7+: вместо parse_mode используем DefaultBotProperties
+    bot = Bot(
+        token=TELEGRAM_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
     dp = build_dp()
-    # ВАЖНО: без ограничения allowed_updates — получаем всё
-    await dp.start_polling(bot)
-    # (если здесь упадём, увидим ошибку в логах)
+    await dp.start_polling(bot)   # без allowed_updates, чтобы ничего не фильтровать
     logger.info("Polling finished.")
 
 # ======= ФОНОВЫЙ АВТОСТАРТ БОТА ДЛЯ STREAMLIT =======
@@ -169,19 +173,16 @@ def streamlit_app():
 
     st.set_page_config(page_title="CheckDoc — Виртуальный доктор", page_icon="💊")
     st.title("💊 CheckDoc — Виртуальный доктор")
-    st.caption("Веб-чат (Assistants API) + Telegram-бот (aiogram 3) запускаются одновременно.")
-
-    # Ссылка на Telegram-бота
     st.link_button("Открыть бота в Telegram", TELEGRAM_LINK)
 
-    # Покажем в сайдбаре статус бота
+    # Сайдбар — только статус (без caption)
     rt = _bot_runtime()
     with st.sidebar:
         st.subheader("Статус бота")
         st.write("✅ Запущен" if rt["started"] else "⏳ Стартуется…")
         if rt["last_error"]:
             st.error(f"Последняя ошибка: {rt['last_error']}")
-        st.caption("Попробуйте в Telegram команды: /start, /ping, /diag")
+        st.write("Команды: /start, /ping, /diag")
 
     st.divider()
     st.subheader("Веб-чат")
@@ -189,7 +190,6 @@ def streamlit_app():
     init_chat_session()
     render_chat()
 
-    # Ввод и ответ в стиле чата
     user_text = st.chat_input("Опишите симптомы или задайте вопрос…")
     if user_text:
         add_msg("user", user_text)
@@ -206,7 +206,7 @@ def streamlit_app():
                 add_msg("assistant", answer)
 
     st.divider()
-    st.caption("Секреты берутся из st.secrets. Используется старый OpenAI Assistants API.")
+    
 
 # ======= ТОЧКИ ВХОДА =======
 if "streamlit" in sys.modules:
