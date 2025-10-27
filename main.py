@@ -3,6 +3,7 @@ import time
 import openai
 import asyncio
 import nest_asyncio
+import streamlit as st
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -18,9 +19,11 @@ nest_asyncio.apply()
 load_dotenv() 
 
 # Переменные среды
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GPT_ID = os.getenv("GPT_ID")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
+GPT_ID = st.secrets["GPT_ID"]
 
 # Настройка OpenAI
 openai.api_key = OPENAI_API_KEY

@@ -4,3 +4,4 @@ telegram
 nest_asyncio
 asyncio
 dotenv
+streamlit
