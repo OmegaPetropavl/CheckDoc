@@ -6,7 +6,7 @@ import asyncio
 from typing import Dict, Optional, TypedDict
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 import openai
 
@@ -26,11 +26,14 @@ def require_env(name: str) -> str:
 
 OPENAI_API_KEY = require_env("OPENAI_API_KEY")
 TELEGRAM_TOKEN = require_env("TELEGRAM_TOKEN")
-GPT_ID         = require_env("GPT_ID")                      # asst_...
-WEBHOOK_BASE   = "https://checkdoc.up.railway.app"                 # e.g. https://<project>.up.railway.app
-WEBHOOK_PATH   = "/telegram/webhook"
-WEBHOOK_URL    = (WEBHOOK_BASE.rstrip("/") + WEBHOOK_PATH) if WEBHOOK_BASE else None
-TELEGRAM_LINK  = os.getenv("TELEGRAM_LINK", "https://t.me/MedAdvice_bot")
+GPT_ID         = require_env("GPT_ID")  # asst_...
+
+# Можно захардкодить, можно вынести в Variables — обе опции валидны
+WEBHOOK_BASE = os.getenv("WEBHOOK_BASE", "https://checkdoc.up.railway.app").rstrip("/")
+WEBHOOK_PATH = "/telegram/webhook"
+WEBHOOK_URL  = f"{WEBHOOK_BASE}{WEBHOOK_PATH}" if WEBHOOK_BASE else None
+
+TELEGRAM_LINK = os.getenv("TELEGRAM_LINK", "https://t.me/MedAdvice_bot")
 
 # ===================== OpenAI setup ======================
 warnings.filterwarnings("ignore", category=DeprecationWarning)  # глушим Deprecation для Assistants API
@@ -48,7 +51,7 @@ TG_THREADS: Dict[int, str] = {}
 
 @dp.message(CommandStart())
 async def tg_start(m: Message):
-    await m.answer("👋 Привет! Это Telegram-версии CheckDoc. Опишите симптомы или задайте вопрос.")
+    await m.answer("👋 Привет! Это Telegram-версия CheckDoc. Опишите симптомы или задайте вопрос.")
 
 @dp.message()
 async def tg_text(m: Message):
@@ -59,12 +62,10 @@ async def tg_text(m: Message):
     try:
         thread_id = TG_THREADS.get(m.from_user.id)
         if not thread_id:
-            # создаём новый thread для этого пользователя
             thread = await asyncio.to_thread(openai.beta.threads.create)
             thread_id = thread.id
             TG_THREADS[m.from_user.id] = thread_id
 
-        # кладём сообщение и запускаем ассистента в рамках thread
         reply = await run_assistant_in_thread(thread_id, text)
         await m.answer(reply or "⚠️ Ответ ассистента не найден.")
     except Exception:
@@ -168,6 +169,11 @@ async def index(request: Request):
     resp.set_cookie("sid", sid, httponly=True, samesite="lax", max_age=60*60*24*14)
     return resp
 
+# Полезно, чтобы поисковики не индекcировали
+@app.get("/robots.txt", response_class=PlainTextResponse)
+def robots():
+    return "User-agent: *\nDisallow: /\n"
+
 class ChatIn(TypedDict):
     text: str
 
@@ -188,7 +194,7 @@ async def chat(request: Request):
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
     data = await request.json()
-    upd = Update.model_validate(data)
+    upd = Update.model_validate(data)  # aiogram v3 (pydantic v2)
     await dp.feed_update(bot, upd)
     return JSONResponse({"ok": True})
 
@@ -198,7 +204,6 @@ async def health():
 
 @app.on_event("startup")
 async def on_startup():
-    # Ставим вебхук Telegram, если уже есть домен
     if WEBHOOK_URL:
         await bot.set_webhook(WEBHOOK_URL)
         print(f"✅ Telegram webhook set: {WEBHOOK_URL}")
