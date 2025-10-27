@@ -3,6 +3,7 @@ import time
 import openai
 import asyncio
 import nest_asyncio
+from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
 ApplicationBuilder,
@@ -14,6 +15,7 @@ filters,
 
 # Устанавливаем поддержку Replit-окружения
 nest_asyncio.apply()
+load_dotenv() 
 
 # Переменные среды
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
