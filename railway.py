@@ -27,7 +27,7 @@ def require_env(name: str) -> str:
 OPENAI_API_KEY = require_env("OPENAI_API_KEY")
 TELEGRAM_TOKEN = require_env("TELEGRAM_TOKEN")
 GPT_ID         = require_env("GPT_ID")                      # asst_...
-WEBHOOK_BASE   = os.getenv("https://checkdoc.up.railway.app")                  # e.g. https://<project>.up.railway.app
+WEBHOOK_BASE   = "https://checkdoc.up.railway.app"                 # e.g. https://<project>.up.railway.app
 WEBHOOK_PATH   = "/telegram/webhook"
 WEBHOOK_URL    = (WEBHOOK_BASE.rstrip("/") + WEBHOOK_PATH) if WEBHOOK_BASE else None
 TELEGRAM_LINK  = os.getenv("TELEGRAM_LINK", "https://t.me/MedAdvice_bot")
