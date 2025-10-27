@@ -19,7 +19,7 @@ TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
 GPT_ID         = st.secrets["GPT_ID"]  # ассистент (asst_...)
 
 # Ссылка на бота в Telegram
-TELEGRAM_BOT_LINK = "https://t.me/CheckDoc"
+TELEGRAM_BOT_LINK = "https://t.me/MedAdvice_bot"
 
 # Глушим DeprecationWarning для Assistants API
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -159,7 +159,7 @@ def streamlit_app():
 
     st.set_page_config(page_title="CheckDoc — Виртуальный доктор", page_icon="💊")
     st.title("💊 CheckDoc — Виртуальный доктор")
-    st.caption("Веб-чат (Assistants API) + Telegram-бот (aiogram 3) запускаются одновременно.")
+    
 
     # Ссылка на бота
     st.link_button("Открыть бота в Telegram", TELEGRAM_BOT_LINK)
@@ -188,7 +188,7 @@ def streamlit_app():
                 add_assistant_message(answer)
 
     st.divider()
-    st.caption("Ключи берутся из st.secrets. Используется старый OpenAI Assistants API без system prompt в коде.")
+    
 
 
 # =================================
