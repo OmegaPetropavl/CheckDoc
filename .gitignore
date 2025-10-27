@@ -1,3 +1,13 @@
 .env
 *.env
 .env.local
+# Python
+__pycache__/
+*.pyc
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Виртуальные окружения
+.venv/
+venv/
