@@ -124,7 +124,7 @@ def streamlit_app():
     st.subheader("Веб-чат")
 
     user_msg = st.text_input("Опишите симптомы или задайте вопрос:")
-    if st.button("Отправить в ассистента") and user_msg.strip():
+    if st.button("Отправить ассистенту") and user_msg.strip():
         try:
             thread = openai.beta.threads.create(
                 messages=[{"role": "user", "content": user_msg.strip()}]
