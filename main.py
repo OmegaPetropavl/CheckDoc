@@ -120,6 +120,14 @@ if RUN_MODE == "bot":
             token=TELEGRAM_TOKEN,
             default=DefaultBotProperties(parse_mode=ParseMode.HTML),
         )
+
+        # ВАЖНО: убираем старый webhook, чтобы работал polling
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook удалён, переходим на polling.")
+        except Exception as e:
+            logger.warning("Не удалось удалить webhook: %r", e)
+
         dp = build_dp()
         logger.info("Запуск Telegram-бота (polling)...")
         await dp.start_polling(bot)
