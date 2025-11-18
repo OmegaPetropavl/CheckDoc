@@ -251,17 +251,17 @@ def streamlit_app():
     st.title("💊 CheckDoc — Виртуальный доктор")
     st.link_button("Открыть бота в Telegram", TELEGRAM_LINK)
 
-    # Статус бота (сайдбар)
-    state = _bot_proc_state()
-    with st.sidebar:
-        st.subheader("Статус бота")
-        if state["proc"] and state["proc"].poll() is None:
-            st.write("✅ Запущен (подпроцесс)")
-        else:
-            st.write("⏳ Бот не запущен или завершился")
-        if state["last_error"]:
-            st.error(f"Последняя ошибка: {state['last_error']}")
-        st.write("Команды: /start, /ping, /diag")
+    # # Статус бота (сайдбар)
+    # state = _bot_proc_state()
+    # with st.sidebar:
+    #     st.subheader("Статус бота")
+    #     if state["proc"] and state["proc"].poll() is None:
+    #         st.write("✅ Запущен (подпроцесс)")
+    #     else:
+    #         st.write("⏳ Бот не запущен или завершился")
+    #     if state["last_error"]:
+    #         st.error(f"Последняя ошибка: {state['last_error']}")
+    #     st.write("Команды: /start, /ping, /diag")
 
     st.divider()
     st.subheader("Веб-чат")
